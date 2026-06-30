@@ -39,8 +39,10 @@ async function callTool(name, args) {
 }
 
 // Intent routing is delegated to the slack-router Lemma agent (real LLM reasoning,
-// not keyword matching) via the route_message MCP tool.
-async function route(text) {
+// not keyword matching) via the route_message MCP tool. `senderId`/`senderName` come
+// from the actual Slack event, never from the LLM, so identity-linking can't be spoofed
+// by what someone types.
+async function route(text, senderId, senderName) {
   const raw = await callTool("route_message", { message: text });
   const decision = JSON.parse(raw);
   if (!decision.tool || decision.tool === "none") return null;
@@ -60,6 +62,12 @@ async function route(text) {
     return {
       tool: decision.tool,
       args: { bug_id: decision.bug_id, decision: decision.decision, reason: decision.reason || "" },
+    };
+  }
+  if (decision.tool === "link_slack_identity") {
+    return {
+      tool: decision.tool,
+      args: { github_login: decision.github_login, slack_user_id: senderId, slack_username: senderName || "" },
     };
   }
   return null;
@@ -96,10 +104,20 @@ function formatResult(tool, raw) {
     const blocks = [
       { type: "section", text: { type: "mrkdwn", text: `${emoji} *Triaged — severity ${data.severity}* _(${data.bug_type})_\n${data.reasoning}` } },
       { type: "section", text: { type: "mrkdwn", text: `*Suggested fix:* ${data.fix_title}\n${data.fix_suggestion}` } },
-      { type: "context", elements: [{ type: "mrkdwn", text: `Risk: ${data.risk_level} • Bug ID: \`${data.bug_id}\`` }] },
-      decideButtons(data.bug_id),
     ];
+    if (data.assignee_login) {
+      const who = data.assignee_slack_user_id ? `<@${data.assignee_slack_user_id}>` : `\`${data.assignee_login}\` (not yet linked to Slack — they can say "I'm ${data.assignee_login} on GitHub")`;
+      blocks.push({ type: "section", text: { type: "mrkdwn", text: `*Suggested owner:* ${who}\n_${data.assignee_reason || ""}_` } });
+    }
+    blocks.push(
+      { type: "context", elements: [{ type: "mrkdwn", text: `Risk: ${data.risk_level} • Bug ID: \`${data.bug_id}\`` }] },
+      decideButtons(data.bug_id)
+    );
     return { text, blocks };
+  }
+
+  if (tool === "link_slack_identity") {
+    return { text: `Got it — linked GitHub \`${data.github_login}\` to you. Future suggested-owner cards will @-mention you directly.` };
   }
 
   if (tool === "list_open_bugs") {
@@ -174,14 +192,14 @@ app.message(async ({ message, say }) => {
   }
   let intent;
   try {
-    intent = await route(message.text);
+    intent = await route(message.text, message.user, "");
   } catch (e) {
     await say(`Something went wrong while figuring out what you meant: ${e.message}`);
     return;
   }
   if (!intent) {
     await say(
-      "I can help with: triaging a bug report, the open backlog, a specific bug's details, closing/backlogging/deferring a bug, or release notes. Try something like `triage this bug: <description>`, `what's our P1 backlog`, `close bug <id>`, or `release notes for v1.0`."
+      "I can help with: triaging a bug report, the open backlog, a specific bug's details, closing/backlogging/deferring a bug, release notes, or linking your GitHub handle so I can @-mention you when you're the suggested owner. Try something like `triage this bug: <description>`, `what's our P1 backlog`, `close bug <id>`, `I'm <github-login> on GitHub`, or `release notes for v1.0`."
     );
     return;
   }

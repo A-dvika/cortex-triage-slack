@@ -38,9 +38,13 @@ function buildServer() {
           url: url || "",
           external_id: "",
         },
-        "persist"
+        // Wait through the owner-suggestion step too (not just persist) so the card can
+        // show who has context on this code, not just that the bug was saved.
+        "owner"
       );
       const ctx = run.execution_context || {};
+      const assigneeLogin = ctx.owner && ctx.owner.assignee_login;
+      const slackUser = assigneeLogin ? await lemma.resolveSlackUser(assigneeLogin) : null;
       const summary = {
         status: run.status,
         bug_id: ctx.persist && ctx.persist.bug_id,
@@ -50,9 +54,30 @@ function buildServer() {
         fix_title: ctx.suggest && ctx.suggest.fix_title,
         fix_suggestion: ctx.suggest && ctx.suggest.fix_suggestion,
         risk_level: ctx.suggest && ctx.suggest.risk_level,
+        assignee_login: assigneeLogin || null,
+        assignee_reason: ctx.owner && ctx.owner.reason,
+        assignee_slack_user_id: slackUser && slackUser.slack_user_id,
         error: run.error,
       };
       return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "link_slack_identity",
+    {
+      title: "Link a GitHub login to a Slack user",
+      description:
+        "Records that a given GitHub username corresponds to a given Slack user, so future suggested-owner cards can @-mention them directly instead of just showing a GitHub handle. Use when someone says something like 'I'm <github-login> on GitHub' or 'my github is X'.",
+      inputSchema: {
+        github_login: z.string(),
+        slack_user_id: z.string(),
+        slack_username: z.string().optional(),
+      },
+    },
+    async ({ github_login, slack_user_id, slack_username }) => {
+      await lemma.linkSlackIdentity(github_login, slack_user_id, slack_username || "");
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, github_login, slack_user_id }, null, 2) }] };
     }
   );
 

@@ -117,4 +117,32 @@ async function runFunction(functionName, inputData) {
   return res;
 }
 
-module.exports = { runWorkflow, query, runFunction, POD_ID };
+async function createRecord(table, data) {
+  return request("POST", `/pods/${POD_ID}/datastore/tables/${table}/records`, { data });
+}
+
+async function updateRecord(table, recordId, data) {
+  return request("PATCH", `/pods/${POD_ID}/datastore/tables/${table}/records/${recordId}`, { data });
+}
+
+// Maps a GitHub login to a Slack user so a suggested owner can become a real @-mention.
+async function linkSlackIdentity(githubLogin, slackUserId, slackUsername) {
+  const existing = await query(
+    `select id from slack_user_map where github_login = '${githubLogin.replace(/'/g, "''")}' limit 1`
+  );
+  const row = (existing.items || [])[0];
+  if (row) {
+    return updateRecord("slack_user_map", row.id, { slack_user_id: slackUserId, slack_username: slackUsername });
+  }
+  return createRecord("slack_user_map", { github_login: githubLogin, slack_user_id: slackUserId, slack_username: slackUsername });
+}
+
+async function resolveSlackUser(githubLogin) {
+  if (!githubLogin) return null;
+  const res = await query(
+    `select slack_user_id, slack_username from slack_user_map where github_login = '${githubLogin.replace(/'/g, "''")}' limit 1`
+  );
+  return (res.items || [])[0] || null;
+}
+
+module.exports = { runWorkflow, query, runFunction, createRecord, updateRecord, linkSlackIdentity, resolveSlackUser, POD_ID };
