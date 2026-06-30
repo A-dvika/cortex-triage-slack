@@ -1,0 +1,5 @@
+node_modules/
+.env.local
+.env.deploy
+.lemma-auth-cache.json
+*.log
